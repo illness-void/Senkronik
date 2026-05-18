@@ -6,13 +6,37 @@
 #include <time.h>
 #include <linux/input.h>
 
-int main(void) {
+int main(int argc, char **argv) {
     uinput_mouse_t *mouse = NULL;
     if (!uinput_mouse_init(&mouse, 1920, 1080, 500)) {
         fprintf(stderr, "uinput mouse init basarisiz.\n");
         return 1;
     }
 
+    if (argc >= 3) {
+        // CLI mode: uinput_mouse <x> <y> [screen_w] [screen_h]
+        int x = atoi(argv[1]);
+        int y = atoi(argv[2]);
+        int sw = argc > 3 ? atoi(argv[3]) : 1920;
+        int sh = argc > 4 ? atoi(argv[4]) : 1080;
+        if (sw != 1920 || sh != 1080) {
+            // Re-init with custom resolution if provided
+            uinput_mouse_destroy(mouse);
+            if (!uinput_mouse_init(&mouse, sw, sh, 500)) {
+                fprintf(stderr, "uinput mouse init basarisiz (%dx%d).\n", sw, sh);
+                return 1;
+            }
+        }
+        uinput_mouse_move(mouse, x, y);
+        usleep(15000);
+        uinput_mouse_click(mouse, BTN_LEFT, 80000);
+        usleep(50000);
+        uinput_mouse_destroy(mouse);
+        return 0;
+    }
+
+    // Test mode (no args) — wrappers below still needed for compilation
+    // but this path is only hit when no CLI arguments given
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     srand((unsigned)(ts.tv_nsec ^ ts.tv_sec));

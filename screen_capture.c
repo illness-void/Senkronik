@@ -1,5 +1,3 @@
-#define _GNU_SOURCE
-
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -23,6 +21,13 @@
 #include <spa/pod/vararg.h>
 #include <systemd/sd-bus.h>
 
+#include "frame_shm.h"
+
+#define FRAME_CROP_X 1466
+#define FRAME_CROP_Y 0
+#define FRAME_CROP_W 454
+#define FRAME_CROP_H 1080
+
 static struct pw_main_loop *loop;
 static struct pw_context *context;
 static struct pw_core *core;
@@ -40,6 +45,9 @@ static int32_t frame_stride;
 static int capture_started_printed;
 static volatile sig_atomic_t stop_requested;
 static volatile uint8_t frame_sink;
+static struct FrameSHM *g_fshm;
+
+static struct FrameSHM *frame_shm_get(void) { return g_fshm; }
 
 struct portal_response {
     int done;
@@ -63,6 +71,7 @@ static int dma_buf_sync_fd(int fd, uint64_t flags) {
 
 static void process_frame(const void *pixels, int32_t stride, uint32_t width, uint32_t height) {
     const uint8_t *p = pixels;
+    struct FrameSHM *fshm = NULL;
 
     if (!p || stride <= 0 || width == 0 || height == 0)
         return;
@@ -70,6 +79,23 @@ static void process_frame(const void *pixels, int32_t stride, uint32_t width, ui
     /* AI ajanının okuyacağı ham XRGB8888 alanı: pixels + stride + width + height. */
     frame_sink ^= p[0];
     frame_sink ^= p[(height - 1) * (size_t)stride + (width - 1) * 4];
+
+    // DOGGYSTYLE BRIDGE: 454x1080 @ x=1466 BGR -> FrameSHM
+    fshm = frame_shm_get();
+    if (fshm && (width == 1920 || width >= (uint32_t)(FRAME_CROP_X + FRAME_CROP_W))) {
+        uint8_t *dst = fshm->data;
+        for (uint32_t y = 0; y < FRAME_CROP_H; y++) {
+            const uint32_t *src_row = (const uint32_t *)(p + y * (size_t)stride) + FRAME_CROP_X;
+            for (uint32_t x = 0; x < FRAME_CROP_W; x++) {
+                uint32_t px = src_row[x];
+                *dst++ = (uint8_t)(px >> 16);  // B
+                *dst++ = (uint8_t)(px >> 8);   // G
+                *dst++ = (uint8_t)px;          // R
+            }
+        }
+        fshm->frame_id++;
+        fshm->ready = 1;
+    }
 }
 
 static void on_process(void *userdata) {
@@ -312,14 +338,27 @@ finish:
     return r;
 }
 
-static int call_create_session(const char *sender, char *session_out, size_t session_out_len) {
+static int call_create_session(const char *sender, char *session_out, size_t session_out_len, int *used_restore) {
     char handle_token[64], session_token[64];
     struct portal_response response = {0};
     sd_bus_message *call = NULL;
     int r;
+    int has_restore = 0;
 
     make_token(handle_token, sizeof(handle_token));
     make_token(session_token, sizeof(session_token));
+
+    // Daha once kaydedilmis restore token'i kontrol et
+    char restore_token[128] = {0};
+    FILE *rf = fopen("/tmp/senkronik_restore_token", "r");
+    if (rf) {
+        if (fgets(restore_token, sizeof(restore_token), rf)) {
+            size_t len = strlen(restore_token);
+            if (len > 0 && restore_token[len-1] == '\n') restore_token[len-1] = '\0';
+            if (restore_token[0]) has_restore = 1;
+        }
+        fclose(rf);
+    }
 
     r = sd_bus_message_new_method_call(bus, &call, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.ScreenCast", "CreateSession");
     if (r < 0) goto finish;
@@ -329,6 +368,11 @@ static int call_create_session(const char *sender, char *session_out, size_t ses
     if (r < 0) goto finish;
     r = append_option_string(call, "session_handle_token", session_token);
     if (r < 0) goto finish;
+    if (has_restore) {
+        r = append_option_string(call, "restore_token", restore_token);
+        if (r < 0) goto finish;
+        printf("Restore token kullaniliyor (diyalog atlaniyor)...\n");
+    }
     r = sd_bus_message_close_container(call);
     if (r < 0) goto finish;
     r = portal_request_call(call, sender, handle_token, &response);
@@ -336,6 +380,7 @@ static int call_create_session(const char *sender, char *session_out, size_t ses
     r = read_session_handle(response.message, session_out, session_out_len);
 
 finish:
+    if (used_restore) *used_restore = has_restore;
     sd_bus_message_unref(call);
     sd_bus_message_unref(response.message);
     return r;
@@ -576,6 +621,7 @@ static void cleanup(void) {
     if (loop) pw_main_loop_destroy(loop);
     if (pw_fd >= 0) close(pw_fd);
     free(session_handle);
+    if (g_fshm) { frame_shm_close(g_fshm, 1); frame_shm_destroy(FRAME_SHM_NAME); }
     if (bus) sd_bus_flush_close_unref(bus);
     pw_deinit();
 }
@@ -607,7 +653,8 @@ int main(int argc, char **argv) {
     }
 
     memset(session_buf, 0, sizeof(session_buf));
-    r = call_create_session(sender, session_buf, sizeof(session_buf));
+    int used_restore = 0;
+    r = call_create_session(sender, session_buf, sizeof(session_buf), &used_restore);
     if (r < 0) {
         fprintf(stderr, "CreateSession başarısız: %s\n", strerror(-r));
         cleanup();
@@ -619,11 +666,16 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    r = call_select_sources(sender, session_handle);
-    if (r < 0) {
-        fprintf(stderr, "SelectSources başarısız: %s\n", strerror(-r));
-        cleanup();
-        return 1;
+    // Eger restore token yoksa SelectSources ile ekran secimi yap
+    if (!used_restore) {
+        r = call_select_sources(sender, session_handle);
+        if (r < 0) {
+            fprintf(stderr, "SelectSources başarısız: %s\n", strerror(-r));
+            cleanup();
+            return 1;
+        }
+    } else {
+        printf("Restore edilen session, SelectSources atlaniyor.\n");
     }
 
     r = call_start(sender, session_handle);
@@ -631,6 +683,13 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Start başarısız: %s\n", strerror(-r));
         cleanup();
         return 1;
+    }
+
+    // Session handle'i kaydet (sonraki calistirmalarda diyalog atlamak icin)
+    FILE *rf = fopen("/tmp/senkronik_restore_token", "w");
+    if (rf) {
+        fprintf(rf, "%s\n", session_handle);
+        fclose(rf);
     }
 
     r = call_open_pipewire_remote(session_handle);
@@ -645,6 +704,14 @@ int main(int argc, char **argv) {
         fprintf(stderr, "PipeWire stream başlatılamadı: %s\n", strerror(-r));
         cleanup();
         return 1;
+    }
+
+    // Doggystyle koprusu: frame SHM olustur
+    if (frame_shm_create(FRAME_SHM_NAME, &g_fshm) == 0) {
+        printf("Frame SHM olusturuldu: %s (%dx%dx%d)\n", FRAME_SHM_NAME, FRAME_CROP_W, FRAME_CROP_H, FRAME_CHANNELS);
+    } else {
+        fprintf(stderr, "Frame SHM olusturulamadi (doggystyle calismiyor olabilir)\n");
+        g_fshm = NULL;
     }
 
     pw_main_loop_run(loop);
