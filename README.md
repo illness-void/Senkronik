@@ -7,6 +7,8 @@ strateji olarak hayata çıkmıştır ve deadline maksimum 7 gündür.
 deadline'ın amınakoyduk bulanlar arayanlardır, bas amınakoyayım.
 ```
 
+> **[Arkose Go-Go-Gadget](https://github.com/react-RE/arkose-go-go-gadget)** — bu notta adı geçen, projenin çıkış sebebi olan repo.
+
 ---
 
 ## Nedir Bu? · What Is This?
@@ -174,6 +176,8 @@ görüp beyni çalıştıran kısım odur. Senkronik ise ona şunları sağlar:
 Siege Engine, NanoDet-Plus-m-416 modeliyle ekrandaki UI öğelerini (buton, metin
 kutusu, simge) tanır ve Senkronik'e "şuraya tıkla" der.
 
+> **Doggystyle reposu:** [github.com/void0x14/doggystyle](https://github.com/void0x14/doggystyle)
+
 ---
 
 ## Dizin Yapısı · File Reference
@@ -230,6 +234,22 @@ Senkronik/
 | Sanal ekrana (Xvfb) tıkla · Click on virtual screen | `uinput_click <x> <y>` |
 | AI'a ekran görüntüsü gönder · Send frame to AI | `screen_capture` (otomatik) |
 | Fare Hz testi yap · Test mouse polling rate | `./uinput_mouse` (argümansız) |
+
+---
+
+## Yol Haritası · Roadmap
+
+- [ ] **Kullanıcı Deneyimi** — Kullanıcı deneyimi arttırılacak; araç, yapay zekaların ve yapay sinir ağlarının native şekilde kullanabileceği şekilde dizayn edilecektir.
+- [ ] **Kullanım Kılavuzu** — Kullanım kılavuzu, argümanlar ve dokümantasyon oluşturulacak ve genişletilecektir.
+- [ ] **Gözlemleme & Takip** — Gerçek zamanlı ve kayıtlı (log) gözlemleme ve takip mekanizmaları eklenecektir.
+- [ ] **Performans & Güvenlik** — Performans ve güvenlik sorunları masaya yatırılacak, iyileştirilecek.
+- [ ] **Zig Portu** — Mevcut C kod tabanının Zig diline portu yapılacak.
+- [ ] **Tam Konfigürasyon** — Kullanıcının istediği şekilde mouse tipleri, Hz değerleri ve tam konfigüre etme desteği eklenecek.
+- [ ] **Saf Metal / Sıfır Bağımlılık** — Hiçbir ek kütüphaneye, ek soyutlamaya ve gereksiz yüke gerek kalmadan metal seviyesinde, sıfır bağımlılıkla raw olarak tekrar yazılacaktır.
+- [ ] **Çoklu Dil Entegrasyonu** — Hangi dilden projeniz olursa olsun entegre kolaylığı sağlanacaktır.
+- [ ] **Dokümantasyon** — Dökümantasyon güçlendirilecek, basitleştirilecek ve daha da anlaşılır hale getirilecektir.
+- [ ] **Bağımsız Repo Yapısı** — Senkronik kaynakları ile Siege Engine (Doggystyle) kaynakları bağımsızlaştırılacak. Senkronik kendi başına bağımsız bir proje olarak yürütülecek, ancak Doggystyle reposu ile bağı klasör yapısında korunacak. Böylece her iki proje de ayrı ayrı daha rahat kullanılabilecek.
+- [ ] **Native Tarayıcı Çözümü** — Tarayıcı kullanımı üzerine native çözümler üretilecek. Bu repodaki her şey birbiriyle senkronik çalışacak; hedef, en stealth, en lightweight ve en hızlı çalışan tarayıcı kullanım sistemini inşa etmek.
 
 ---
 
